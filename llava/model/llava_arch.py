@@ -21,6 +21,7 @@ from llava.constants import IGNORE_INDEX, IMAGE_TOKEN_INDEX
 from llava.model.clip_encoder import CLIPVisionTower
 from llava.model.convnext_clip_encoder import ConvNeXtCLIPVisionTower
 from llava.model.vision_projector import get_vision_projector
+from llava.model.multimodal_projector.dense_connector import dense_connector
 
 
 class LlavaMetaModel:
@@ -90,10 +91,14 @@ class LlavaMetaModel:
 
         self.config.use_mm_proj = True
         self.config.mm_projector_type = getattr(model_args, 'mm_projector_type', 'linear')
-        self.config.mm_hidden_size = self.vision_tower.hidden_size
         self.config.mm_vision_select_layer = mm_vision_select_layer
         self.config.mm_vision_select_feature = mm_vision_select_feature
         self.config.vision_encoder_type = model_args.vision_encoder_type
+        self.config.mm_dense_connector_type = getattr(model_args, 'mm_dense_connector_type', None)
+        
+        if self.config.mm_dense_connector_type == "dci" or self.config.mm_dense_connector_type == "sci":
+            self.vision_tower.head_size_scales = 3
+        self.config.mm_hidden_size = self.vision_tower.hidden_size
 
         self.mm_projector = get_vision_projector(self.config)
 
@@ -120,7 +125,14 @@ class LlavaMetaForCausalLM(ABC):
         return self.get_model().get_vision_tower()
 
     def encode_images(self, images):
-        image_features = self.get_model().get_vision_tower()(images)
+        is_forward_outs = self.get_model().config.mm_dense_connector_type in ['sti', 'sci', 'dci'] and self.get_model().config.vision_encoder_type == "CLIP"
+        image_features = self.get_model().get_vision_tower()(images, is_forward_outs)
+
+        # dense connector
+        if is_forward_outs:
+            image_features, image_forward_outs = image_features
+            image_features = dense_connector(image_features, image_forward_outs, self.get_vision_tower().is_siglip, self.get_model().config.mm_dense_connector_type)
+
         image_features = self.get_model().mm_projector(image_features)
         return image_features
     
