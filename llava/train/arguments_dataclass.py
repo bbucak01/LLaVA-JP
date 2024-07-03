@@ -28,6 +28,8 @@ class ModelArguments:
     drop_path_rates: Optional[list[float]] = field(default=None)
     tune_convnext_stage: Optional[list[str]] = field(default=None)
 
+    # Dense connection setting
+    mm_dense_connector_type: Optional[str] = field(default=None)
 
 @dataclass
 class DataArguments:

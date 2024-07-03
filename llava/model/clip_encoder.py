@@ -25,6 +25,7 @@ class CLIPVisionTower(nn.Module):
         self.is_loaded = False
         self.requires_grad = requires_grad
         self.scales = scales
+        self.head_size_scales = 1
 
         self.vision_tower_name = vision_tower_name
         self.select_layer = mm_vision_select_layer
@@ -32,7 +33,11 @@ class CLIPVisionTower(nn.Module):
 
         self.image_processor = None
         self.vision_tower = None
+        self.is_siglip = False
 
+        if scales is not None:
+            self.head_size_scales = len(scales)
+        
         if not delay_load:
             self.load_model()
         else:
@@ -40,6 +45,7 @@ class CLIPVisionTower(nn.Module):
                 self.cfg_only = CLIPVisionConfig.from_pretrained(self.vision_tower_name)
             elif "siglip" in self.vision_tower_name:
                 self.cfg_only = SiglipVisionConfig.from_pretrained(self.vision_tower_name)
+                self.is_siglip = True
             else:
                 raise ValueError(f'Unsupported vision_tower_name: {self.vision_tower_name}')
 
@@ -50,6 +56,7 @@ class CLIPVisionTower(nn.Module):
         elif "siglip" in self.vision_tower_name:
             self.image_processor = SiglipImageProcessor.from_pretrained(self.vision_tower_name)
             self.vision_tower = SiglipVisionModel.from_pretrained(self.vision_tower_name)
+            self.is_siglip = True
         else:
             raise ValueError(f'Unsupported vision_tower_name: {self.vision_tower_name}')
         self.vision_tower.requires_grad_(self.requires_grad)
@@ -67,12 +74,12 @@ class CLIPVisionTower(nn.Module):
         return image_features
 
     @torch.no_grad()
-    def forward(self, images):
+    def forward(self, images, is_forward_outs=False):
         if type(images) is list:
             image_features = []
             for image in images:
                 if self.scales is None:
-                    image_feature = self._forward_feature(images.unsqueeze(0))
+                    image_feature = self._forward_feature(images.unsqueeze(0), is_forward_outs)
                 else:
                     image_feature = multiscale_forward(
                         self._forward_feature, 
@@ -81,11 +88,10 @@ class CLIPVisionTower(nn.Module):
                         num_prefix_token=0, 
                         max_split_size=self.image_processor.size["height"]
                     )
-                #image_feature = self.feature_select(image_forward_out).to(image.dtype)
                 image_features.append(image_feature)
         else:
             if self.scales is None:
-                image_features = self._forward_feature(images)
+                image_features = self._forward_feature(images, is_forward_outs)
             else:
                 image_features = multiscale_forward(
                     self._forward_feature, 
@@ -94,12 +100,17 @@ class CLIPVisionTower(nn.Module):
                     num_prefix_token=0, 
                     max_split_size=self.image_processor.size["height"]
                 )
-            #image_features = self.feature_select(image_forward_outs).to(images.dtype)
 
         return image_features
     
-    def _forward_feature(self, inputs):
-        return self.feature_select(self.vision_tower(inputs.to(device=self.device, dtype=self.dtype), output_hidden_states=True))
+    def _forward_feature(self, inputs, is_forward_outs=False):
+        image_forward_outs = self.vision_tower(inputs.to(device=self.device, dtype=self.dtype), output_hidden_states=True)
+        image_features = self.feature_select(image_forward_outs)
+        if is_forward_outs:
+            # For Dense Connector
+            return image_features, image_forward_outs
+
+        return image_features
 
     @property
     def dummy_feature(self):
@@ -122,11 +133,11 @@ class CLIPVisionTower(nn.Module):
 
     @property
     def hidden_size(self):
-        if self.scales is None:
-            return self.config.hidden_size
+        #if self.scales is None:
+        #    return self.config.hidden_size
         
-        return self.config.hidden_size*len(self.scales)
-
+        return self.config.hidden_size*self.head_size_scales
+    
     @property
     def num_patches(self):
         return (self.config.image_size // self.config.patch_size) ** 2
