@@ -319,5 +319,5 @@ def train():
                                        output_dir=training_args.output_dir)
         
 
-if __name__ == '__main__':
-    train()
+
+train()
